@@ -49,3 +49,8 @@ pip-wheel-metadata
 .vscode
 
 PROJECT_PLAN*.md
+
+# Characterization test artifacts (generated in CI, never committed)
+tests/characterization/_artifacts/
+tests/characterization/_base_artifacts/
+tests/characterization/*_tmp/
