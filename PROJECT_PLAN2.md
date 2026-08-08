@@ -103,24 +103,27 @@ Hindi/Hebrew for the language set — that changed during implementation.
 The 6 languages that actually shipped are fr, de, ja, zh, hi, he (no
 Spanish); see `PROJECT_PLAN.md` for the corrected rationale.
 
-### Next: release migration state tracking as v1.8.0
+### Shipped: migration state tracking and `--apply`
 
-`--status`/`--history`/`--promote`/`--record-rollback` (see "Completed
-Features") is code-complete and fully tested but still sitting on branch
-`new-feature-6-18-2026`. Landing this — merge, version bump, tag, PyPI
-release — is the immediate next step, ahead of any new feature work below.
+`--status`/`--history`/`--promote`/`--record-rollback` merged into `main`
+2026-08-08 (PRs #8–#10; no version bump/tag yet — still on v1.7.2).
+`--apply` (execute the migration against `dburl_from` instead of only
+printing it, with automatic history recording on confirmed success — see
+README's "Applying Migrations" section) shipped shortly after on top of
+that. Neither has been cut into a tagged release yet; `pyproject.toml`
+still reads 1.7.2. Bumping to v1.8.0 and publishing is still outstanding.
 
 ### Planned (Backlog)
 
 | Feature | Effort | Value | Notes |
 |---------|--------|-------|-------|
-| `--apply` | Medium | High | Execute generated SQL directly instead of requiring the user to pipe to `psql`. Also needed so `migradiff_history` can record true "applied" state instead of just "generated/reviewed" — see the known limitation in README's Migration State Tracking section. |
 | Native `--fail-on-destructive` flag | Low | High | Currently this behavior only exists inside the GitHub Action's `action-entrypoint.sh`. CircleCI/GitLab/pre-commit users have no equivalent without wrapping the CLI themselves. |
+| `--apply` + `--promote` | Medium | Medium | `--apply` currently refuses to run when `--promote` is also given — `--promote`'s from/to direction needs to be reconciled with which database `--apply` should actually execute against before this is safe to wire up. |
 | `--document` | Medium-High | High | Schema documentation generation |
 | Multi-schema hardening | Medium | High | `Migration.__init__` (`migra/migra.py`) still hard-rejects `schema` + `exclude_schema` together; cross-schema FK/dependency ordering in `add_all_changes()` hasn't had a dedicated multi-tenant test pass |
 | pgvector support | Low | Medium | Modern Postgres vector types — unconfirmed whether `schemainspect` already round-trips them |
 | `--suggest-indexes` | Medium | Medium | AI recommends useful indexes; can reuse `AIAdvisor`'s existing table-stats extraction |
-| `--dry-run` | Low | Medium | Only meaningful once `--apply` exists |
+| `--dry-run` | Low | Medium | Preview what `--apply` would do without executing it |
 
 ---
 
@@ -320,20 +323,17 @@ without a dedicated version bump — not tied to a CHANGELOG entry.
 
 ## Next Steps
 
-1. **Land migration state tracking as v1.8.0**
-   - Merge `new-feature-6-18-2026` — code-complete, 342/342 tests passing,
-     flake8/black clean, and CLI-smoke-tested end-to-end as of 2026-08-08
-   - Bump version, tag release, publish to PyPI
+1. **Cut v1.8.0** — migration state tracking and `--apply` are both merged
+   to `main` and fully tested, but `pyproject.toml` is still at 1.7.2 and
+   nothing has been tagged/published to PyPI yet.
 
-2. **`--apply` flag**
-   - Closes the "generated vs. applied" gap called out in README's
-     Migration State Tracking known limitation
-   - Should auto-call the equivalent of `--record-history` on success
-
-3. **Native `--fail-on-destructive` CLI flag**
+2. **Native `--fail-on-destructive` CLI flag**
    - Promote the GitHub Action's destructive-detection behavior into
      `command.py` itself so non-Action CI users (CircleCI, GitLab, plain
      scripts) get it too
+
+3. **Reconcile `--promote`'s direction with `--apply`** before wiring the
+   two together — see the Planned/Backlog table above.
 
 4. **Post v1.8.0:** Enterprise tier planning
    - Design licensing system
@@ -342,6 +342,6 @@ without a dedicated version bump — not tied to a CHANGELOG entry.
 
 ---
 
-**Document version:** Updated 2026-08-08 (reconciled with actual repo/code state)  
+**Document version:** Updated 2026-08-08 (reconciled with actual repo/code state, incl. `--apply`)  
 **Last updated by:** Claude (with Leo)  
 **Repository:** https://github.com/postgresql-tools/migra

@@ -64,15 +64,22 @@ branch, and publishes to PyPI + tags a release from `master`.
   (`_check_for_destructive`), column-rename detection (`detect_column_renames`, vs. a naive
   drop+add), risk classification for `--output json` (`classify_sql_statement`), credential
   redaction in error output (`redact_credentials`).
-- `--status`/`--history`/`--promote`/`--record-rollback` etc. talk to `migra/history.py`.
+- `--status`/`--history`/`--promote`/`--record-rollback`/`--apply` etc. talk to `migra/history.py`.
 
 ### Migration state tracking (`migra/history.py`)
 
-A `migradiff_history` table (`HISTORY_TABLE`) recorded into the *target* database, keyed by a
-SHA-256 hash of normalized SQL (`compute_migration_hash`). This is the basis for `--promote`
-(multi-environment promotion) and `--record-rollback`. **Important semantic**: a history row means
-a migration was generated/reviewed for that target, not that migra itself executed it — migra never
-applies SQL to a live database. Preserve this distinction in any related code or docs.
+A `migradiff_history` table (`HISTORY_TABLE`), keyed by a SHA-256 hash of normalized SQL
+(`compute_migration_hash`). This is the basis for `--promote` (multi-environment promotion),
+`--record-rollback`, and `--apply`. **Important semantic, easy to get backwards**: a plain
+`--record-history` (without `--apply`) writes into `dburl_target`'s history table and only means
+"this migration was generated/reviewed for that target" — not that it was executed anywhere.
+`--apply` (`_apply_migration()` in `command.py`) is the one path that actually executes SQL: it runs
+the migration against `dburl_from` (the database being migrated — see the CLI's own help text and
+the README's `psql dburl_from < migration.sql` convention) inside a single transaction, and only on
+confirmed success does it record history — into `dburl_from`'s table, not `dburl_target`'s. A failed
+`--apply` rolls back everything and records nothing. `--apply` is rejected up front (before any
+dispatch) when combined with `--from-file` (dburl_from would be an ephemeral throwaway database) or
+`--promote` (the chain's from/to direction is not yet reconciled with `--apply`'s execution target).
 
 ### AI features (optional extra: `pip install migradiff[ai]`, needs `ANTHROPIC_API_KEY`)
 

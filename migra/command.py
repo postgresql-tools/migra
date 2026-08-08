@@ -554,6 +554,16 @@ def parse_args(args):
         " Optionally provide the description as an argument.",
     )
     parser.add_argument(
+        "--apply",
+        dest="apply",
+        action="store_true",
+        default=False,
+        help="Execute the generated migration against dburl_from (the database"
+        " being migrated), instead of only printing it. On success, automatically"
+        " records the migration in dburl_from's migradiff_history table — no need"
+        " to also pass --record-history. Not supported with --from-file or --promote.",
+    )
+    parser.add_argument(
         "--record-history",
         dest="record_history",
         action="store_true",
@@ -641,11 +651,76 @@ def _resolve_env_alias(key):
     )
 
 
+def _apply_migration(dburl_from, statements, sql_output, rollback_sql, env_label):
+    """Execute `statements` against dburl_from in a single transaction, then
+    record the migration in dburl_from's migradiff_history table.
+
+    Returns a dict describing the outcome; never raises. Execution and
+    history-recording are separate try/excepts, since a failure to record
+    history after a successful apply is a (loud) warning, not an apply
+    failure — the schema change already happened.
+    """
+    from sqlbag import S as _S
+
+    result = {
+        "applied": False,
+        "target": redact_credentials(dburl_from),
+        "statement_count": len(statements),
+        "error": None,
+        "history_recorded": False,
+        "history_error": None,
+    }
+
+    try:
+        with _S(dburl_from) as s:
+            for stmt in statements:
+                s.execute(text(stmt))
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+    result["applied"] = True
+
+    from .history import compute_migration_hash, ensure_history_table, record_applied
+
+    try:
+        with _S(dburl_from) as s:
+            ensure_history_table(s)
+            record_applied(
+                s,
+                migration_hash=compute_migration_hash(sql_output),
+                forward_sql=sql_output,
+                rollback_sql=rollback_sql,
+                environment_label=env_label,
+            )
+        result["history_recorded"] = True
+    except Exception as e:
+        result["history_error"] = str(e)
+
+    return result
+
+
 def run(args, out=None, err=None):
     if not out:
         out = sys.stdout  # pragma: no cover
     if not err:
         err = sys.stderr  # pragma: no cover
+
+    if args.apply and args.from_file:
+        print(
+            "MigraDiff: --apply is not supported with --from-file"
+            " (there is no live database to apply to — dburl_from is a"
+            " temporary database loaded from the dump file).",
+            file=err,
+        )
+        return 1
+
+    if args.apply and args.promote:
+        print(
+            "MigraDiff: --apply is not supported with --promote yet.",
+            file=err,
+        )
+        return 1
 
     # --status / --history: display migration history
     if args.status is not None or args.history is not None:
@@ -1445,9 +1520,18 @@ def _run_inner(args, out=None, err=None):
                     )
 
         sql_output = None
+        apply_result = None
         try:
             if statements:
                 sql_output = modified_statements.sql
+                if args.apply:
+                    apply_result = _apply_migration(
+                        args.dburl_from,
+                        modified_statements,
+                        sql_output,
+                        rollback_result["text"] if rollback_result else None,
+                        args.env_label,
+                    )
                 if args.output == "json":
                     json_out = format_json_output(
                         statements,
@@ -1485,6 +1569,12 @@ def _run_inner(args, out=None, err=None):
                             "generated_at": advisory_result.get("generated_at", ""),
                         }
                         json_out = json_mod.dumps(data, indent=2)
+                    if apply_result is not None:
+                        import json as json_mod
+
+                        data = json_mod.loads(json_out)
+                        data["apply"] = apply_result
+                        json_out = json_mod.dumps(data, indent=2)
                     print(json_out, file=out)
                 elif args.force_utf8:
                     print(modified_statements.sql.encode("utf8"), file=out)
@@ -1501,6 +1591,32 @@ def _run_inner(args, out=None, err=None):
                     print(file=out)
                     print("--- Performance Advisory ---", file=out)
                     print(advisory_result["text"], file=out)
+                if apply_result is not None and args.output != "json":
+                    print(file=out)
+                    if apply_result["applied"]:
+                        print(
+                            "-- Applied {} statement(s) to {}".format(
+                                apply_result["statement_count"],
+                                apply_result["target"],
+                            ),
+                            file=out,
+                        )
+                        if not apply_result["history_recorded"]:
+                            print(
+                                "-- WARNING: applied successfully, but failed to"
+                                " record migration history: {}".format(
+                                    apply_result["history_error"]
+                                ),
+                                file=err,
+                            )
+                    else:
+                        print(
+                            "-- ERROR: --apply failed, no changes were committed"
+                            " to {}: {}".format(
+                                apply_result["target"], apply_result["error"]
+                            ),
+                            file=err,
+                        )
             elif args.output == "json":
                 json_out = format_json_output(
                     statements,
@@ -1562,8 +1678,11 @@ def _run_inner(args, out=None, err=None):
         args._generated_sql = sql_output if statements else None
         args._generated_rollback = rollback_result["text"] if rollback_result else None
 
-        # --record-history: record the generated migration
-        if args.record_history and statements and args.dburl_target:
+        # --record-history: record the generated migration. Skipped when --apply
+        # already ran, since _apply_migration() already recorded it against
+        # dburl_from (the database that was actually changed) — recording it
+        # again here against dburl_target would be a second, misleading entry.
+        if args.record_history and not args.apply and statements and args.dburl_target:
             from .history import (
                 compute_migration_hash,
                 ensure_history_table,
@@ -1588,6 +1707,9 @@ def _run_inner(args, out=None, err=None):
                     "MigraDiff: Failed to record migration history: {}".format(e),
                     file=err,
                 )
+
+        if apply_result is not None and not apply_result["applied"]:
+            return 4
 
         if not statements:
             return 0

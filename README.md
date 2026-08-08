@@ -278,13 +278,13 @@ rollback tracking.
 
 ### ⚠ Known Limitation
 
-`migradiff_history` records that a migration was **generated/reviewed**
-for a target database, not that the SQL was necessarily *executed* by
-MigraDiff itself (MigraDiff does not apply migrations to live databases
-today — it only diffs and generates SQL). Recording true "applied" state
-requires your deployment pipeline to also call
-`migra --record-history` (or the future `--apply` flag, not yet
-implemented) after running the generated SQL.
+Without `--apply` (below), `migradiff_history` only records that a
+migration was **generated/reviewed** for a target database, not that the
+SQL was necessarily *executed*. If you generate SQL and pipe it to `psql`
+yourself, calling `migra --record-history` only tells MigraDiff "this
+migration was proposed" — it has no way to know whether your `psql` step
+actually succeeded. Use `--apply` when you want MigraDiff itself to run
+the migration and only record history on confirmed success.
 
 Be explicit about this in your pipeline so you don't assume false
 guarantees about whether a migration has actually been applied.
@@ -328,6 +328,36 @@ Use `--env-label` to tag the entry:
 ```bash
 migra --record-history --env-label staging postgres://db_a postgres://db_b
 ```
+
+### Applying Migrations (`--apply`)
+
+`--apply` executes the generated migration directly against `dburl_from`
+(the first positional argument — "the database you want to migrate", same
+database the README's basic usage example pipes to `psql`) instead of only
+printing it:
+
+```bash
+migra --apply postgres://db_production postgres://db_branch
+```
+
+On success, MigraDiff automatically records the migration in
+`dburl_from`'s `migradiff_history` table — you don't need to also pass
+`--record-history`. If any statement fails, the whole migration is rolled
+back as a single transaction (nothing is partially applied) and **nothing
+is recorded**, since it wasn't actually applied. The command exits non-zero
+(exit code 4) so pipelines can detect the failure.
+
+```bash
+migra --apply --env-label prod postgres://db_production postgres://db_branch
+```
+
+`--apply` respects the same safety gates as everything else: destructive
+statements are blocked unless `--force-destructive` (or `--unsafe`) is
+given, and the block happens *before* anything is executed.
+
+`--apply` is not supported with `--from-file` (there's no live database to
+apply to — the schema files get loaded into temporary throwaway databases)
+or with `--promote` (not implemented yet).
 
 ### Multi-Environment Promotion (`--promote`)
 
