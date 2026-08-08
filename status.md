@@ -3,21 +3,28 @@
 Snapshot of current work-in-progress on this branch. Update as work progresses; this is not a
 changelog (see CHANGELOG.md for that).
 
-## Current branch: `new-feature-6-18-2026`
+## Current branch: `feature/apply-flag` (off `main` at `46c2447`)
+
+Migration state tracking (`--status`/`--history`/`--record-history`/`--promote`/
+`--record-rollback`) and the CI-trigger/SQLAlchemy-2.x fixes are already merged to `main`
+(PRs #8, #9, #10) — see git log, not this file, for that history.
 
 **In progress / uncommitted:**
-- Modified: `CHANGELOG.md`, `README.md`, `migra/command.py` — migration state
-  tracking (`--status`/`--history`/`--record-history`/`--promote`/`--record-rollback`)
-- New: `LICENSING.md` (unrelated), `migra/history.py`, `tests/test_command_promote.py`,
-  `tests/test_command_rollback_tracking.py`, `tests/test_history.py`
-- Also uncommitted (not part of this task): `PROJECT_PLAN.md`, `PROJECT_PLAN2.md`
-  updated 2026-08-08 to reflect actual shipped state (they were stale, describing
-  v1.5.1 as current when v1.7.2 was already released)
+- Modified: `CHANGELOG.md`, `README.md`, `migra/command.py`, `CLAUDE.md`,
+  `PROJECT_PLAN.md`, `PROJECT_PLAN2.md` — new `--apply` flag
+- New: `tests/test_command_apply.py`
 
-**Verified 2026-08-08:** all 32 new tests pass against a real Postgres instance;
-full suite is 342 passed / 2 skipped; flake8 and black are clean; CLI smoke-tested
-end-to-end (`--status`, `--record-history`, `--promote`, `--record-rollback`
-round-tripped correctly). Feature is code-complete.
+**What `--apply` does:** executes the generated migration against `dburl_from` in a single
+transaction instead of only printing it; on success, automatically records it in `dburl_from`'s
+`migradiff_history` table (no need to also pass `--record-history`); on failure, rolls back
+everything and records nothing, exits 4. Rejected up front when combined with `--from-file` or
+`--promote` — see CLAUDE.md's "Migration state tracking" section for the from/target direction
+reasoning.
 
-**Next steps:** merge this branch and release as v1.8.0 (see PROJECT_PLAN.md
-"Next Steps" for the follow-on backlog: `--apply`, native `--fail-on-destructive`).
+**Verified 2026-08-08:** 11 new tests pass (including a direct atomicity test against
+`_apply_migration()` that forces a mid-migration failure); full suite is 353 passed / 2 skipped,
+no regressions; flake8 and black clean; also verified against SQLAlchemy 2.0.51 in an isolated
+venv (no other raw-SQL issues found).
+
+**Next steps:** commit, push, open PR. Known follow-up (not done here): reconcile `--promote`'s
+from/to direction with `--apply` before wiring the two together (see PROJECT_PLAN.md backlog).

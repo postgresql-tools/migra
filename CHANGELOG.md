@@ -27,12 +27,30 @@
   `test_command_rollback_tracking.py` — all using real Postgres databases
   (no mocks), covering idempotent table creation, hash normalization,
   conflict detection, empty-diff hops, safe mode, and rollback tracking.
+- **Migration execution** (`--apply`):
+  - Executes the generated migration against `dburl_from` in a single
+    transaction (all-or-nothing — a failed statement rolls back everything
+    that ran before it) instead of only printing the SQL
+  - On success, automatically records the migration in `dburl_from`'s
+    `migradiff_history` table — no need to also pass `--record-history`
+  - On failure, nothing is recorded (since nothing was actually applied)
+    and the command exits with code 4
+  - Not supported with `--from-file` (no live database to apply to) or
+    `--promote` (not implemented yet) — both are rejected with a clear
+    error before anything runs
+  - New helper `_apply_migration()` in `migra/command.py`; JSON output
+    (`--output json`) gets a new `"apply"` object with the outcome
+  - New tests: `test_command_apply.py` (11 tests, real Postgres, including
+    a direct atomicity test that forces a mid-migration failure)
 
 ### Notes
 
 - This is the foundational layer for the upcoming "Control Plane" feature set.
-- Known limitation: `migradiff_history` records migrations as *generated*,
-  not *applied* — see the README "Migration State Tracking" section for details.
+- Resolved: `migradiff_history` used to only record migrations as
+  *generated*, not *applied* — `--apply` closes that gap by executing the
+  migration itself and only recording history on confirmed success. Plain
+  `--record-history` (without `--apply`) still only means "generated", not
+  "applied" — see the README "Migration State Tracking" section.
 - All new features work without AI extras (`anthropic` optional dependency).
 
 ## [1.7.2] - 2026-06-08
