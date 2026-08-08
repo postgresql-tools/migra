@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 
 import io
 
+from sqlalchemy import text
 from sqlbag import S, temporary_database
 
 
@@ -58,16 +59,20 @@ class TestEnsureHistoryTable:
 
                 # Verify table exists by querying it
                 rows = s.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_name = 'migradiff_history'"
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_name = 'migradiff_history'"
+                    )
                 ).fetchall()
                 assert len(rows) == 1
 
                 # Verify columns
                 cols = s.execute(
-                    "SELECT column_name, data_type FROM information_schema.columns "
-                    "WHERE table_name = 'migradiff_history' "
-                    "ORDER BY ordinal_position"
+                    text(
+                        "SELECT column_name, data_type FROM information_schema.columns "
+                        "WHERE table_name = 'migradiff_history' "
+                        "ORDER BY ordinal_position"
+                    )
                 ).fetchall()
                 col_names = [c[0] for c in cols]
                 assert "id" in col_names
@@ -95,7 +100,7 @@ class TestEnsureHistoryTable:
                     forward_sql="SELECT 1;",
                 )
                 row = s.execute(
-                    "SELECT rollback_status FROM migradiff_history"
+                    text("SELECT rollback_status FROM migradiff_history")
                 ).fetchone()
                 assert row[0] == "not_attempted"
 
