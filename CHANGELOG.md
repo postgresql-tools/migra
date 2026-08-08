@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Migration state tracking** (`migradiff_history` table):
+  - `--status` / `--history` flags to view migration history from a database
+  - `--record-history` flag to record generated migrations in the target DB
+  - `--env-label` flag to tag history entries with an environment name
+  - New module `migra/history.py` with `ensure_history_table()`,
+    `record_applied()`, `record_rollback()`, `get_applied_hashes()`,
+    `get_history()`, and `compute_migration_hash()`
+  - SQLAlchemy Core implementation via `sqlbag`, no new dependencies
+- **Multi-environment promotion** (`--promote`):
+  - Colon-separated chain of 2+ database URLs or environment aliases
+  - Conflict detection at each hop (target must not have hashes source lacks)
+  - Composes with `--explain`, `--rollback`, `--advise`, `--force-destructive`
+  - Environment aliases resolved from `~/.config/migradiff/environments.json`
+  - `--record-history` integration per hop
+- **Rollback execution tracking** (`--record-rollback`):
+  - Records rollback status (`rolled_back` / `rollback_failed`) in the history table
+  - Accepts a migration hash or rollback SQL file path
+  - `--rollback-status` flag to mark failed rollback attempts
+  - `--status` / `--history` output shows rollback annotations
+- **New tests**: `test_history.py`, `test_command_promote.py`,
+  `test_command_rollback_tracking.py` — all using real Postgres databases
+  (no mocks), covering idempotent table creation, hash normalization,
+  conflict detection, empty-diff hops, safe mode, and rollback tracking.
+
+### Notes
+
+- This is the foundational layer for the upcoming "Control Plane" feature set.
+- Known limitation: `migradiff_history` records migrations as *generated*,
+  not *applied* — see the README "Migration State Tracking" section for details.
+- All new features work without AI extras (`anthropic` optional dependency).
+
 ## [1.7.2] - 2026-06-08
 - Fix: Use PEP 621 [project] table for PyPI metadata (homepage, repository, bug tracker)
 

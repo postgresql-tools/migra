@@ -269,6 +269,144 @@ Requires pip install migradiff[ai] and an Anthropic API key.
 
 ---
 
+## Migration State Tracking
+
+MigraDiff now includes a migration state tracking system that records
+generated migrations in a `migradiff_history` table in your target
+databases. This is the foundation for multi-environment promotion and
+rollback tracking.
+
+### ⚠ Known Limitation
+
+`migradiff_history` records that a migration was **generated/reviewed**
+for a target database, not that the SQL was necessarily *executed* by
+MigraDiff itself (MigraDiff does not apply migrations to live databases
+today — it only diffs and generates SQL). Recording true "applied" state
+requires your deployment pipeline to also call
+`migra --record-history` (or the future `--apply` flag, not yet
+implemented) after running the generated SQL.
+
+Be explicit about this in your pipeline so you don't assume false
+guarantees about whether a migration has actually been applied.
+
+### View Migration History
+
+```bash
+# Show recent history (last 10 entries)
+migra --status postgres://db_target
+
+# Show full history
+migra --history postgres://db_target
+```
+
+Output includes:
+- **Hash** (short, 8 chars) — identifies the migration
+- **Name** — optional human label
+- **Applied At** — when the migration was generated/recorded
+- **Applied By** — database user who recorded it
+- **Rollback** — rollback status (ROLLED BACK, ROLLBACK FAILED, or -)
+
+JSON output is supported:
+
+```bash
+migra --status postgres://db_target --output json
+```
+
+### Record Migration History
+
+After generating a migration diff, record it in the target database:
+
+```bash
+migra --record-history postgres://db_target_a postgres://db_target_b
+```
+
+This calls `ensure_history_table()` and inserts a row with the
+generated SQL hash, the forward SQL, and an optional environment label.
+
+Use `--env-label` to tag the entry:
+
+```bash
+migra --record-history --env-label staging postgres://db_a postgres://db_b
+```
+
+### Multi-Environment Promotion (`--promote`)
+
+`--promote` generates migrations along a chain of environments, with
+conflict detection at each hop:
+
+```bash
+migra --unsafe --promote dev:staging:prod
+```
+
+This:
+1. Connects to dev, staging, and prod
+2. Verifies staging's `migradiff_history` is a subset of dev's
+   (no unknown migrations in staging)
+3. Generates the `dev → staging` diff and prints it
+4. Generates the `staging → prod` diff and prints it
+5. If `--record-history` is also given, records each hop against
+   the target environment's history table
+
+Environment names are resolved from
+`~/.config/migradiff/environments.json`:
+
+```json
+{
+    "dev": "postgresql://localhost/dev",
+    "staging": "postgresql://staging.example.com/db",
+    "prod": "postgresql://prod.example.com/db"
+}
+```
+
+You can also mix aliases with literal URLs:
+
+```bash
+migra --promote dev:postgresql://custom-host/db:prod
+```
+
+Conflict example — if staging has a migration that dev doesn't:
+
+```
+MigraDiff: CONFLICT in promotion chain postgres://dev → postgres://staging
+  postgres://staging has migrations not found in postgres://dev:
+    abc1234deadbeef
+  Resolve the conflict before continuing the chain.
+```
+
+If two adjacent environments already match:
+
+```
+No changes needed: postgres://dev → postgres://staging
+```
+
+`--promote` composes with `--explain`, `--rollback`, `--advise`,
+`--force-destructive`, and `--output json` the same way a normal
+two-argument diff does.
+
+### Rollback Tracking (`--record-rollback`)
+
+After executing a rollback, record it to close the audit loop:
+
+```bash
+migra --record-rollback <migration_hash_or_file> postgres://db_target
+```
+
+You can also mark a rollback as failed:
+
+```bash
+migra --record-rollback abc1234 --rollback-status rollback_failed postgres://db_target
+```
+
+The `--status` and `--history` views then show the rollback state:
+
+```
+Hash         Name                 Applied At                 Applied By       Rollback
+----------- -------------------- -------------------------- ---------------- --------------------
+abc1234      v001_create_users    2026-06-18T12:00:00Z      deploy_bot       ROLLED BACK 2026-06-18T13:00:00Z
+```
+
+---
+
 ## Development Setup
 
 The test suite requires a running PostgreSQL instance. The easiest
