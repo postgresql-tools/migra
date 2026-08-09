@@ -3,28 +3,30 @@
 Snapshot of current work-in-progress on this branch. Update as work progresses; this is not a
 changelog (see CHANGELOG.md for that).
 
-## Current branch: `feature/apply-flag` (off `main` at `46c2447`)
+## Current branch: `fix/multi-schema-filtering` (off `main` at `a762dec`)
 
-Migration state tracking (`--status`/`--history`/`--record-history`/`--promote`/
-`--record-rollback`) and the CI-trigger/SQLAlchemy-2.x fixes are already merged to `main`
-(PRs #8, #9, #10) — see git log, not this file, for that history.
+Migration state tracking, the CI-trigger/SQLAlchemy-2.x fixes, and `--apply` are already merged
+to `main` (PRs #8–#11) — see git log, not this file, for that history.
 
 **In progress / uncommitted:**
-- Modified: `CHANGELOG.md`, `README.md`, `migra/command.py`, `CLAUDE.md`,
-  `PROJECT_PLAN.md`, `PROJECT_PLAN2.md` — new `--apply` flag
-- New: `tests/test_command_apply.py`
+- Modified: `CHANGELOG.md`, `migra/migra.py`, `migra/util.py`, `tests/test_migra.py`
+- New: `tests/FIXTURES/multischema/`, `tests/FIXTURES/exclude_multischema/`
 
-**What `--apply` does:** executes the generated migration against `dburl_from` in a single
-transaction instead of only printing it; on success, automatically records it in `dburl_from`'s
-`migradiff_history` table (no need to also pass `--record-history`); on failure, rolls back
-everything and records nothing, exits 4. Rejected up front when combined with `--from-file` or
-`--promote` — see CLAUDE.md's "Migration state tracking" section for the from/target direction
-reasoning.
+**The bug:** `--schema public,reporting` was documented as supported but silently produced an
+empty diff — the raw comma-joined string was passed straight to `schemainspect`, which compares
+it for *exact* equality against each object's schema name. Single-schema and no-schema calls were
+never affected.
 
-**Verified 2026-08-08:** 11 new tests pass (including a direct atomicity test against
-`_apply_migration()` that forces a mid-migration failure); full suite is 353 passed / 2 skipped,
-no regressions; flake8 and black clean; also verified against SQLAlchemy 2.0.51 in an isolated
-venv (no other raw-SQL issues found).
+**The fix:** `migra/util.py` gains `parse_schema_arg()`/`filter_inspector_schemas()` (the latter
+reuses schemainspect's own `PROPS` list rather than duplicating it, so it stays in sync with
+whatever object types schemainspect tracks). `migra/migra.py` gains `_get_inspector()`, wired into
+all 5 of `Migration`'s inspector-construction call sites; single/no-schema calls pass straight
+through unchanged, only 2+ comma-separated names take the new post-filter path.
 
-**Next steps:** commit, push, open PR. Known follow-up (not done here): reconcile `--promote`'s
-from/to direction with `--apply` before wiring the two together (see PROJECT_PLAN.md backlog).
+**Verified 2026-08-08:** new tests (`test_multischema`, `test_multischema_whitespace_tolerant`,
+`test_exclude_multischema`) each include a third, unlisted schema in the fixture to prove
+filtering actually excludes it, not just that it happens to work with one schema; also exercises
+`Migration.apply()` directly (via `do_fixture_test`'s second half), not just the CLI path. Full
+suite: 356 passed / 2 skipped, no regressions. flake8/black clean.
+
+**Next steps:** commit, push, open PR.

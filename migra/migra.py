@@ -4,6 +4,27 @@ from schemainspect import DBInspector, get_inspector
 
 from .changes import Changes
 from .statements import Statements
+from .util import filter_inspector_schemas, parse_schema_arg
+
+
+def _get_inspector(x, schema=None, exclude_schema=None):
+    """Like schemainspect's get_inspector(), but also supports a
+    comma-separated `schema`/`exclude_schema` (2+ names). schemainspect's
+    own one_schema()/filter_schema() only ever compare against a single
+    schema name, so a raw multi-name string would silently match nothing.
+    Single-schema (or no-schema) calls are passed straight through
+    unchanged.
+    """
+    schema_list = parse_schema_arg(schema)
+    exclude_list = parse_schema_arg(exclude_schema)
+
+    if schema_list and len(schema_list) > 1:
+        return filter_inspector_schemas(get_inspector(x), schema_list)
+
+    if exclude_list and len(exclude_list) > 1:
+        return filter_inspector_schemas(get_inspector(x), None, exclude=exclude_list)
+
+    return get_inspector(x, schema=schema, exclude_schema=exclude_schema)
 
 
 class Migration(object):
@@ -28,7 +49,7 @@ class Migration(object):
         if isinstance(x_from, DBInspector):
             self.changes.i_from = x_from
         else:
-            self.changes.i_from = get_inspector(
+            self.changes.i_from = _get_inspector(
                 x_from, schema=schema, exclude_schema=exclude_schema
             )
             if x_from:
@@ -36,7 +57,7 @@ class Migration(object):
         if isinstance(x_target, DBInspector):
             self.changes.i_target = x_target
         else:
-            self.changes.i_target = get_inspector(
+            self.changes.i_target = _get_inspector(
                 x_target, schema=schema, exclude_schema=exclude_schema
             )
             if x_target:
@@ -45,12 +66,12 @@ class Migration(object):
         self.changes.ignore_extension_versions = ignore_extension_versions
 
     def inspect_from(self):
-        self.changes.i_from = get_inspector(
+        self.changes.i_from = _get_inspector(
             self.s_from, schema=self.schema, exclude_schema=self.exclude_schema
         )
 
     def inspect_target(self):
-        self.changes.i_target = get_inspector(
+        self.changes.i_target = _get_inspector(
             self.s_target, schema=self.schema, exclude_schema=self.exclude_schema
         )
 
@@ -62,7 +83,7 @@ class Migration(object):
 
         for stmt in self.statements:
             raw_execute(self.s_from, stmt)
-        self.changes.i_from = get_inspector(
+        self.changes.i_from = _get_inspector(
             self.s_from, schema=self.schema, exclude_schema=self.exclude_schema
         )
         safety_on = self.statements.safe
