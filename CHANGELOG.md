@@ -43,6 +43,31 @@
   - New tests: `test_command_apply.py` (11 tests, real Postgres, including
     a direct atomicity test that forces a mid-migration failure)
 
+### Fixed
+
+- **Comma-separated `--schema`/`--exclude_schema` silently matched nothing**:
+  `--schema public,reporting` was documented as supported but the raw
+  string was passed straight to `schemainspect`, which compares it for
+  *exact* equality against each object's schema name — `"public,reporting"`
+  never equals `"public"` or `"reporting"`, so the diff was always empty
+  and nothing was reported to the user. Single-schema (`--schema public`)
+  and no-schema calls were never affected — this only broke 2+ names.
+  - Fix: `migra/util.py` gains `parse_schema_arg()` (splits and trims the
+    comma-separated value) and `filter_inspector_schemas()` (post-filters
+    an inspector's tracked object collections using schemainspect's own
+    `PROPS` list, so it stays in sync with whatever object types
+    schemainspect adds in the future).
+  - `migra/migra.py` gains `_get_inspector()`, used at all 5 of
+    `Migration`'s inspector-construction call sites (`__init__` x2,
+    `inspect_from()`, `inspect_target()`, `apply()`). Single-schema/no-schema
+    calls are passed straight through unchanged (zero behavior change);
+    only 2+ comma-separated names take the new post-filter path.
+  - New tests: `test_multischema`, `test_multischema_whitespace_tolerant`,
+    `test_exclude_multischema` in `test_migra.py`, plus new fixtures under
+    `tests/FIXTURES/multischema/` and `tests/FIXTURES/exclude_multischema/`
+    — each includes a third, unlisted schema to prove filtering actually
+    excludes it, not just that it happens to work with one schema.
+
 ### Notes
 
 - This is the foundational layer for the upcoming "Control Plane" feature set.
