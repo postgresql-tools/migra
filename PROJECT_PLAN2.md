@@ -25,17 +25,50 @@
 
 ## Completed Features
 
-### v1.3.0 (Sessions 009–010)
+### v1.3.0 (Sessions 009–010) — 2026-05-30
 - `--explain`: plain-English explanation of migrations
 - `--from-migrations-dir`: load migrations from directory
 
-### v1.4.0 (Sessions 011–013)
+### v1.4.0 (Sessions 011–013) — 2026-06-01
 - `--rollback`: generates reversal migration SQL
 - `--advise`: deterministic + AI performance/risk assessment
 - `--generate`: writes migration SQL from plain-English description
 
-### v1.5.0 (Session 017)
-- `--comment-on`: diffs COMMENT ON annotations on objects
+### v1.5.0 (Session 017) — 2026-06-01
+- COMMENT ON diffing: detects added/changed/removed comments across all
+  object types; automatic in `--from-file` mode; feeds `--explain`/`--generate`
+  as schema context. (There is no separate `--comment-on` flag — this runs
+  by default; the plan previously described it as a flag, which was wrong.)
+
+### v1.6.0 — 2026-06-04
+- `--explain-drift`: AI-powered schema drift analysis between two live
+  databases (`--from-db`/`--to-db`), BREAKING/WARNING/INFO categorization,
+  live table sizes for risk assessment
+- `migra/db_inspector.py`: standalone `get_remote_schema()`/`compare_schemas()`
+
+### v1.7.x — 2026-06-08
+- PyPI metadata fixes (PEP 621 `[project]` table, homepage/repo URLs)
+- Repo moved from `migradiff/migra` to `postgresql-tools/migra`
+
+### Multi-language docs & licensing (merged pre-1.7.2, docs-only, no version bump)
+- README translated into 6 languages (fr, de, ja, zh, hi, he) alongside English
+- Licensing section (personal story + Business License ask) added to all READMEs
+
+### Migration state tracking — code-complete, not yet released
+- `--status` / `--history`: view migration history from a `migradiff_history` table
+- `--record-history` / `--env-label`: record generated migrations against a target DB
+- `--promote`: chain migrations across environments (`dev:staging:prod` or
+  `~/.config/migradiff/environments.json` aliases) with conflict detection per hop
+- `--record-rollback` / `--rollback-status`: close the audit loop on executed rollbacks
+- New module `migra/history.py`; 32 new tests (`test_history.py`,
+  `test_command_promote.py`, `test_command_rollback_tracking.py`)
+- Verified 2026-08-08: all 32 new tests pass against a real Postgres instance,
+  full suite (342 tests) passes, flake8/black clean, and the CLI was smoke-tested
+  end-to-end (`--status`, `--record-history`, `--promote`, `--record-rollback`
+  round-tripped correctly against live databases)
+- Documented in CHANGELOG `[Unreleased]` and README's "Migration State Tracking"
+  section; sitting uncommitted on branch `new-feature-6-18-2026` — next release
+  will be **v1.8.0**
 
 ### Infrastructure (Session 018)
 - ✅ Production CI/CD pipeline
@@ -47,80 +80,50 @@
 
 ## Current Version
 
-**v1.5.1** (released June 4, 2026)
+**v1.7.2** (released 2026-06-08 — matches `pyproject.toml` and PyPI)
 
-Test counts:
-- Baseline: 109 tests
-- v1.3.0: 142 tests (after --explain)
-- v1.4.0: 175 tests (after AI suite)
-- v1.5.0: 190 tests (after COMMENT ON)
+Migration state tracking (above) is feature-complete and fully tested on
+`new-feature-6-18-2026` but not yet merged or released.
+
+Test counts (actual, `pytest tests -q`, excluding the separate
+characterization suite): **342 passed, 2 skipped**, verified 2026-08-08.
 
 ---
 
 ## Free Tier Roadmap
 
-### Session 019: `--explain-drift` (7–10 days)
+### Shipped: `--explain-drift` (v1.6.0) and multi-language README
 
-**Feature:** Compare two **live PostgreSQL databases** and explain differences.
+Both were originally planned as "Session 019" and "Session 020" — both are
+done. See "Completed Features" above for what actually shipped:
+`--explain-drift` in v1.6.0 (2026-06-04), and the README translations.
 
-```bash
-migra --from-db "postgresql://user:pass@old.example.com/db" \
-       --to-db "postgresql://user:pass@prod.example.com/db" \
-       --explain-drift
-```
+Note: this document originally planned Spanish (README.es.md) instead of
+Hindi/Hebrew for the language set — that changed during implementation.
+The 6 languages that actually shipped are fr, de, ja, zh, hi, he (no
+Spanish); see `PROJECT_PLAN.md` for the corrected rationale.
 
-**Output:** Human-readable explanation of schema differences with risk categorization (BREAKING/WARNING/INFO).
+### Shipped: migration state tracking and `--apply`
 
-**Use case:** "What changed in production? Is it safe?"
+`--status`/`--history`/`--promote`/`--record-rollback` merged into `main`
+2026-08-08 (PRs #8–#10; no version bump/tag yet — still on v1.7.2).
+`--apply` (execute the migration against `dburl_from` instead of only
+printing it, with automatic history recording on confirmed success — see
+README's "Applying Migrations" section) shipped shortly after on top of
+that. Neither has been cut into a tagged release yet; `pyproject.toml`
+still reads 1.7.2. Bumping to v1.8.0 and publishing is still outstanding.
 
-**Tests:** 80+ new tests (target: 270+ total)
+### Planned (Backlog)
 
-**Release:** v1.6.0
-
-**Why first:**
-- Highest differentiation (competitors don't have this)
-- Reuses existing schema inspection logic
-- Fills gap: explain migrations vs. reality
-
----
-
-### Session 020: Multi-Language README (3–5 days)
-
-**Feature:** README in multiple languages (i18n).
-
-Supported languages:
-- 🇬🇧 English (default)
-- 🇪🇸 Spanish (README.es.md)
-- 🇫🇷 French (README.fr.md)
-- 🇩🇪 German (README.de.md)
-- 🇯🇵 Japanese (README.ja.md)
-- 🇨🇳 Chinese (README.zh.md)
-
-**How:** 
-- Maintain main README.md (English)
-- Create translated versions in repo root
-- Link from main README
-- Use GitHub language detection for auto-redirect
-
-**Why:**
-- Global audience (PostgreSQL is international)
-- Drives adoption outside English-speaking markets
-- Differentiator (most tools English-only)
-- SEO boost (ranked in multiple language searches)
-
-**Release:** v1.6.1
-
----
-
-### Planned Sessions (Backlog)
-
-| Session | Feature | Effort | Value | Notes |
-|---------|---------|--------|-------|-------|
-| 021 | `--document` | Medium-High | High | Schema documentation generation |
-| 022 | pgvector support | Low | Medium | Modern Postgres vector types |
-| 023 | `--suggest-indexes` | Medium | Medium | AI recommends useful indexes |
-| 024 | `--dry-run --explain` | Low | Medium | Preview changes without applying |
-| 025 | Multi-schema refactor | Medium | High | Better support for multiple schemas |
+| Feature | Effort | Value | Notes |
+|---------|--------|-------|-------|
+| Native `--fail-on-destructive` flag | Low | High | Currently this behavior only exists inside the GitHub Action's `action-entrypoint.sh`. CircleCI/GitLab/pre-commit users have no equivalent without wrapping the CLI themselves. |
+| `--apply` + `--promote` | Medium | Medium | `--apply` currently refuses to run when `--promote` is also given — `--promote`'s from/to direction needs to be reconciled with which database `--apply` should actually execute against before this is safe to wire up. |
+| `--document` | Medium-High | High | Schema documentation generation |
+| Multi-schema hardening | Medium | High | `Migration.__init__` (`migra/migra.py`) still hard-rejects `schema` + `exclude_schema` together; cross-schema FK/dependency ordering in `add_all_changes()` hasn't had a dedicated multi-tenant test pass |
+| pgvector support | Low | Medium | Modern Postgres vector types — unconfirmed whether `schemainspect` already round-trips them |
+| `--suggest-indexes` | Medium | Medium | AI recommends useful indexes; can reuse `AIAdvisor`'s existing table-stats extraction |
+| `--dry-run` | Low | Medium | Preview what `--apply` would do without executing it |
 
 ---
 
@@ -212,18 +215,31 @@ The `schemainspect` package (upstream: djrobstep, unmaintained) uses deprecated 
 
 **Migration path (future):** Replace with maintained schema inspection library or migrate to Rust.
 
+### docker-compose.yml referenced but missing from repo
+`README.md`'s "Development Setup" section and the CHANGELOG (v1.1.0 entry)
+both reference a `docker-compose.yml` for one-command local Postgres, but
+no such file currently exists in the repo root. Verified 2026-08-08 by
+spinning up Postgres manually (`docker run postgres:16 ...`) to run the
+test suite instead.
+
 ---
 
 ## Version History
 
 | Version | Release Date | Key Features |
 |---------|--------------|--------------|
-| v1.3.0 | May 2026 | --explain, --from-migrations-dir |
-| v1.4.0 | June 1, 2026 | --rollback, --advise, --generate |
-| v1.5.0 | June 4, 2026 | COMMENT ON diffing |
-| v1.5.1 | June 4, 2026 | Version bump (no feature changes) |
-| v1.6.0 | TBD (Session 019) | --explain-drift |
-| v1.6.1 | TBD (Session 020) | Multi-language README |
+| v1.1.0 | 2026-05-29 | --from-file, --output json, pre-commit hook |
+| v1.2.0 | 2026-05-29 | Column rename detection, --safe/--force-destructive, enum/composite/domain diffing |
+| v1.3.0 | 2026-05-30 | --explain, --setup-ai, --from-migrations-dir |
+| v1.4.0 | 2026-06-01 | --rollback, --advise, --generate |
+| v1.5.0 | 2026-06-01 | COMMENT ON diffing |
+| v1.6.0 | 2026-06-04 | --explain-drift |
+| v1.7.1 | 2026-06-08 | PyPI homepage/repo URL fix |
+| v1.7.2 | 2026-06-08 | PEP 621 metadata fix (current release) |
+| v1.8.0 | TBD | Migration state tracking (--status/--history/--promote/--record-rollback) — code-complete, unreleased |
+
+Multi-language READMEs and the Licensing section merged as docs-only PRs
+without a dedicated version bump — not tied to a CHANGELOG entry.
 
 ---
 
@@ -267,16 +283,17 @@ The `schemainspect` package (upstream: djrobstep, unmaintained) uses deprecated 
 ### Q2 2026
 - ✅ v1.5.0 shipped
 - ✅ CI/CD pipeline live
-- ⏳ v1.6.0 shipped (`--explain-drift`)
-- ⏳ 50+ GitHub stars
-- ⏳ 1k+ monthly PyPI downloads
+- ✅ v1.6.0 shipped (`--explain-drift`)
+- ⏳ 50+ GitHub stars (unverified — outside what a code/repo analysis can confirm)
+- ⏳ 1k+ monthly PyPI downloads (unverified — outside what a code/repo analysis can confirm)
 
 ### Q3 2026
-- ⏳ v1.6.1 shipped (multi-language README)
-- ⏳ v1.7.0 shipped (`--document`, pgvector support)
-- ⏳ 10+ enterprise customers ($30k–$100k MRR)
-- ⏳ 100+ GitHub stars
-- ⏳ 5k+ monthly PyPI downloads
+- ✅ Multi-language README shipped (docs-only PR, no dedicated version bump)
+- ⏳ v1.8.0 shipped (migration state tracking — code-complete, awaiting release)
+- ⏳ `--document`, pgvector support (not yet started)
+- ⏳ 10+ enterprise customers ($30k–$100k MRR) (unverified)
+- ⏳ 100+ GitHub stars (unverified)
+- ⏳ 5k+ monthly PyPI downloads (unverified)
 
 ### Q4 2026
 - ⏳ Enterprise tier revenue: $50k/month ARR
@@ -306,23 +323,25 @@ The `schemainspect` package (upstream: djrobstep, unmaintained) uses deprecated 
 
 ## Next Steps
 
-1. **Session 019:** Implement `--explain-drift` (7–10 days)
-   - New feature: `migra --from-db X --to-db Y --explain-drift`
-   - 80+ tests (target 270+ total)
-   - Release v1.6.0
+1. **Cut v1.8.0** — migration state tracking and `--apply` are both merged
+   to `main` and fully tested, but `pyproject.toml` is still at 1.7.2 and
+   nothing has been tagged/published to PyPI yet.
 
-2. **Session 020:** Multi-language README (3–5 days)
-   - README in 6 languages
-   - i18n links from main README
-   - Release v1.6.1
+2. **Native `--fail-on-destructive` CLI flag**
+   - Promote the GitHub Action's destructive-detection behavior into
+     `command.py` itself so non-Action CI users (CircleCI, GitLab, plain
+     scripts) get it too
 
-3. **Post v1.6.0:** Enterprise tier planning
+3. **Reconcile `--promote`'s direction with `--apply`** before wiring the
+   two together — see the Planned/Backlog table above.
+
+4. **Post v1.8.0:** Enterprise tier planning
    - Design licensing system
    - Plan hosted features
    - Build enterprise marketing narrative
 
 ---
 
-**Document version:** Updated June 4, 2026 (post-Session 018)  
+**Document version:** Updated 2026-08-08 (reconciled with actual repo/code state, incl. `--apply`)  
 **Last updated by:** Claude (with Leo)  
 **Repository:** https://github.com/postgresql-tools/migra

@@ -30,7 +30,7 @@ view definitions.
 
 ## Workflow
 
-- **CI** runs on: push to `master`, PRs to `master`
+- **CI** runs on: push to `main` or `master`, PRs targeting `main` or `master`
   - Lint (flake8, black)
   - Test matrix (4 Python versions × 3 Postgres versions = 12 jobs)
   - Coverage report
@@ -39,3 +39,15 @@ view definitions.
   - Build package
   - Publish to PyPI
   - Create GitHub release
+
+### `main` vs `master` branch protection (2026-08-08)
+
+`main` is the actual GitHub default branch (`gh repo view --json defaultBranchRef`
+confirms this), but only `master` has branch protection configured — 13 required
+status checks (`Lint` + the 12-job test matrix), `strict` status checks, no force
+pushes/deletions. `main` has **no protection at all**
+(`gh api repos/.../branches/main/protection` returns 404). This means PRs merged
+into `main` today get no required CI gate. The workflow trigger was fixed here
+to run on both branches, but the branch protection *rule* itself still needs to
+be applied to `main` — that's a repo-settings change, not a workflow file change,
+and hasn't been done yet.

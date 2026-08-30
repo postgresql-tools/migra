@@ -276,6 +276,45 @@ def _format_destructive_summary(statements):
     return "\n".join(lines)
 
 
+def _require_ai(out, err, cli_key=None):
+    """Resolve an Anthropic API key, printing standard help text on failure.
+
+    Returns the resolved key string or ``None`` on error.
+    """
+    try:
+        import anthropic  # noqa: F401
+    except ImportError:
+        print(
+            "MigraDiff: AI features require the AI extras.",
+            file=err,
+        )
+        print("Install with: pip install migradiff[ai]", file=err)
+        return None
+
+    from .ai_explain import resolve_api_key
+
+    api_key = resolve_api_key(cli_key=cli_key)
+    if not api_key:
+        print(
+            "MigraDiff: An Anthropic API key is required.",
+            file=err,
+        )
+        print(file=err)
+        print("Set it up once with:", file=err)
+        print("  migra --setup-ai", file=err)
+        print(file=err)
+        print("Or set the environment variable:", file=err)
+        print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
+        print(file=err)
+        print(
+            "Get an API key at: https://console.anthropic.com",
+            file=err,
+        )
+        return None
+
+    return api_key
+
+
 def _migration_sort_key(filename):
     """Extract sort key from a migration filename."""
     stem = filename.lower().replace(".sql", "")
@@ -554,6 +593,66 @@ def parse_args(args):
         " Optionally provide the description as an argument.",
     )
     parser.add_argument(
+        "--apply",
+        dest="apply",
+        action="store_true",
+        default=False,
+        help="Execute the generated migration against dburl_from (the database"
+        " being migrated), instead of only printing it. On success, automatically"
+        " records the migration in dburl_from's migradiff_history table — no need"
+        " to also pass --record-history. Not supported with --from-file or --promote.",
+    )
+    parser.add_argument(
+        "--record-history",
+        dest="record_history",
+        action="store_true",
+        default=False,
+        help="Record the generated migration in the target database's migradiff_history table",
+    )
+    parser.add_argument(
+        "--status",
+        dest="status",
+        nargs="?",
+        const=True,
+        default=None,
+        help="Show recent migration history from a database (default limit: 10)",
+    )
+    parser.add_argument(
+        "--history",
+        dest="history",
+        nargs="?",
+        const=True,
+        default=None,
+        help="Show full migration history from a database (no limit)",
+    )
+    parser.add_argument(
+        "--promote",
+        dest="promote",
+        default=None,
+        help="Generate migrations along a colon-separated chain of environments"
+        " (e.g. dev:staging:prod). Supports database URLs or environment aliases.",
+    )
+    parser.add_argument(
+        "--record-rollback",
+        dest="record_rollback",
+        default=None,
+        help="Record a rollback in the migradiff_history table."
+        " Accepts a migration hash or a rollback SQL file path.",
+    )
+    parser.add_argument(
+        "--env-label",
+        dest="env_label",
+        default=None,
+        help='Environment label for --record-history (e.g. "dev", "staging", "prod")',
+    )
+    parser.add_argument(
+        "--rollback-status",
+        dest="rollback_status",
+        default="rolled_back",
+        choices=["rolled_back", "rollback_failed"],
+        help="Status to record when using --record-rollback (default: rolled_back)",
+    )
+    parser.add_argument(
         "dburl_from", nargs="?", help="The database you want to migrate."
     )
     parser.add_argument(
@@ -562,11 +661,316 @@ def parse_args(args):
     return parser.parse_args(args)
 
 
+def _resolve_env_aliases_part(part):
+    """Resolve a single promote chain segment to a database URL.
+    Returns the part as-is if it looks like a URL (contains ://),
+    otherwise resolves it as an environment alias.
+    """
+    if "://" in part:
+        return part
+    return _resolve_env_alias(part)
+
+
+def _resolve_env_alias(key):
+    """Resolve a single environment alias to a database URL."""
+    env_file = os.environ.get(
+        "MIGRADIFF_ENV_FILE",
+        os.path.join(
+            os.path.expanduser("~"), ".config", "migradiff", "environments.json"
+        ),
+    )
+    if os.path.exists(env_file):
+        with open(env_file) as f:
+            config = json.load(f)
+        if key in config:
+            return config[key]
+    raise ValueError(
+        "MigraDiff: Unknown environment alias '{}'.\n"
+        "Define it in {}".format(key, env_file)
+    )
+
+
+def _apply_migration(dburl_from, statements, sql_output, rollback_sql, env_label):
+    """Execute `statements` against dburl_from in a single transaction, then
+    record the migration in dburl_from's migradiff_history table.
+
+    Returns a dict describing the outcome; never raises. Execution and
+    history-recording are separate try/excepts, since a failure to record
+    history after a successful apply is a (loud) warning, not an apply
+    failure — the schema change already happened.
+    """
+    from sqlbag import S as _S
+
+    result = {
+        "applied": False,
+        "target": redact_credentials(dburl_from),
+        "statement_count": len(statements),
+        "error": None,
+        "history_recorded": False,
+        "history_error": None,
+    }
+
+    try:
+        with _S(dburl_from) as s:
+            for stmt in statements:
+                s.execute(text(stmt))
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+    result["applied"] = True
+
+    from .history import compute_migration_hash, ensure_history_table, record_applied
+
+    try:
+        with _S(dburl_from) as s:
+            ensure_history_table(s)
+            record_applied(
+                s,
+                migration_hash=compute_migration_hash(sql_output),
+                forward_sql=sql_output,
+                rollback_sql=rollback_sql,
+                environment_label=env_label,
+            )
+        result["history_recorded"] = True
+    except Exception as e:
+        result["history_error"] = str(e)
+
+    return result
+
+
 def run(args, out=None, err=None):
     if not out:
         out = sys.stdout  # pragma: no cover
     if not err:
         err = sys.stderr  # pragma: no cover
+
+    if args.apply and args.from_file:
+        print(
+            "MigraDiff: --apply is not supported with --from-file"
+            " (there is no live database to apply to — dburl_from is a"
+            " temporary database loaded from the dump file).",
+            file=err,
+        )
+        return 1
+
+    if args.apply and args.promote:
+        print(
+            "MigraDiff: --apply is not supported with --promote yet.",
+            file=err,
+        )
+        return 1
+
+    # --status / --history: display migration history
+    if args.status is not None or args.history is not None:
+        from .history import ensure_history_table, get_history
+
+        dburl = args.status if isinstance(args.status, str) else None
+        if dburl is None:
+            dburl = args.history if isinstance(args.history, str) else None
+        if dburl is None:
+            dburl = args.dburl_from
+        if not dburl:
+            print(
+                "MigraDiff: --status/--history requires a database URL.",
+                file=err,
+            )
+            return 1
+
+        limit = None if args.history is not None else 10
+
+        from sqlbag import S
+
+        with S(dburl) as s:
+            ensure_history_table(s)
+            entries = get_history(s, limit=limit)
+
+        if args.output == "json":
+            import json as json_mod
+
+            print(json_mod.dumps(entries, indent=2), file=out)
+        else:
+            if not entries:
+                print("No migration history found.", file=out)
+                return 0
+            header = "{:<12} {:<20} {:<26} {:<16} {:<20}".format(
+                "Hash", "Name", "Applied At", "Applied By", "Rollback"
+            )
+            print(header, file=out)
+            print("-" * len(header), file=out)
+            for e in entries:
+                short_hash = e["migration_hash"][:8] if e["migration_hash"] else ""
+                name = e["migration_name"] or ""
+                applied_at = e["applied_at"] or ""
+                applied_by = e["applied_by"] or ""
+                rb_status = e["rollback_status"]
+                rb_annotation = ""
+                if rb_status == "rolled_back":
+                    rb_annotation = "ROLLED BACK"
+                    if e.get("rolled_back_at"):
+                        rb_annotation += " " + e["rolled_back_at"]
+                elif rb_status == "rollback_failed":
+                    rb_annotation = "ROLLBACK FAILED"
+                else:
+                    rb_annotation = "-"
+                print(
+                    "{:<12} {:<20} {:<26} {:<16} {:<20}".format(
+                        short_hash,
+                        name[:18],
+                        applied_at[:24],
+                        applied_by[:14],
+                        rb_annotation[:18],
+                    ),
+                    file=out,
+                )
+        return 0
+
+    # --record-rollback: record a rollback in the history table
+    if args.record_rollback:
+        from .history import (
+            compute_migration_hash,
+            ensure_history_table,
+            record_rollback,
+        )
+
+        value = args.record_rollback
+        if os.path.exists(value) and value.endswith(".sql"):
+            with open(value) as f:
+                migration_hash = compute_migration_hash(f.read())
+        else:
+            migration_hash = value.strip()
+
+        dburl = args.dburl_from
+        if not dburl:
+            print(
+                "MigraDiff: --record-rollback requires a database URL.",
+                file=err,
+            )
+            return 1
+
+        from sqlbag import S
+
+        try:
+            with S(dburl) as s:
+                ensure_history_table(s)
+                record_rollback(
+                    s,
+                    migration_hash,
+                    status=args.rollback_status,
+                )
+            print(
+                "MigraDiff: Rollback recorded for hash {}".format(migration_hash[:12]),
+                file=out,
+            )
+            return 0
+        except ValueError as e:
+            print(str(e), file=err)
+            return 1
+
+    # --promote: multi-environment promotion chain
+    if args.promote:
+        from .history import ensure_history_table, get_applied_hashes, record_applied
+
+        promote_parts = re.split(r":(?!//)", args.promote)
+        if len(promote_parts) < 2:
+            print(
+                "MigraDiff: --promote requires at least 2 environments"
+                " (colon-separated).",
+                file=err,
+            )
+            return 1
+
+        try:
+            chain = [_resolve_env_aliases_part(p) for p in promote_parts]
+        except ValueError as e:
+            print(str(e), file=err)
+            return 1
+
+        from sqlbag import S
+
+        for i in range(len(chain) - 1):
+            from_url = chain[i]
+            to_url = chain[i + 1]
+            from_label = redact_credentials(from_url)
+            to_label = redact_credentials(to_url)
+
+            # Conflict check: ensure to_env has no hashes from_env doesn't have
+            try:
+                with S(from_url) as s_from:
+                    ensure_history_table(s_from)
+                    from_hashes = get_applied_hashes(s_from)
+                with S(to_url) as s_to:
+                    ensure_history_table(s_to)
+                    to_hashes = get_applied_hashes(s_to)
+            except Exception as e:
+                print(
+                    "MigraDiff: Could not check migration state for"
+                    " {} -> {}: {}".format(from_label, to_label, e),
+                    file=err,
+                )
+                return 1
+
+            stray_hashes = to_hashes - from_hashes
+            if stray_hashes:
+                print(
+                    "MigraDiff: CONFLICT in promotion chain"
+                    " {} -> {}".format(from_label, to_label),
+                    file=err,
+                )
+                print(
+                    "  {} has migrations not found in {}:".format(to_label, from_label),
+                    file=err,
+                )
+                for h in sorted(stray_hashes):
+                    print("    {}".format(h[:12]), file=err)
+                print(
+                    "  Resolve the conflict before continuing the chain.",
+                    file=err,
+                )
+                return 1
+
+            # Run the diff for this hop
+            print("=== {} -> {} ===".format(from_label, to_label), file=out)
+
+            sub_args = argparse.Namespace(**vars(args))
+            sub_args.dburl_from = from_url
+            sub_args.dburl_target = to_url
+            sub_args._original_from = from_url
+            sub_args._original_target = to_url
+            sub_args.from_migrations_dir = None
+            sub_args.from_file = False
+
+            hop_status = _run_inner(sub_args, out, err)
+
+            if hop_status == 0 and not sub_args._has_statements:
+                print(
+                    "No changes needed: {} -> {}".format(from_label, to_label),
+                    file=out,
+                )
+                continue
+
+            if hop_status == 1 or hop_status == 3:
+                return hop_status
+
+            # Record history if --record-history
+            if args.record_history and hasattr(sub_args, "_generated_sql"):
+                from .history import compute_migration_hash
+
+                sql_text = sub_args._generated_sql
+                if sql_text and sql_text.strip():
+                    fwd_hash = compute_migration_hash(sql_text)
+                    rollback_sql_text = getattr(sub_args, "_generated_rollback", None)
+                    with S(to_url) as s:
+                        ensure_history_table(s)
+                        record_applied(
+                            s,
+                            migration_hash=fwd_hash,
+                            forward_sql=sql_text,
+                            rollback_sql=rollback_sql_text,
+                            environment_label=args.env_label,
+                        )
+
+        return 0
 
     if args.setup_ai:
         from .ai_explain import setup_ai_interactive
@@ -582,35 +986,8 @@ def run(args, out=None, err=None):
             )
             return 1
 
-        try:
-            import anthropic  # noqa: F401, F811
-        except ImportError:
-            print(
-                "MigraDiff: --explain-drift requires the AI extras.",
-                file=err,
-            )
-            print("Install with: pip install migradiff[ai]", file=err)
-            return 1
-
-        from .ai_explain import resolve_api_key
-
-        api_key = resolve_api_key(cli_key=args.api_key)
+        api_key = _require_ai(out, err, args.api_key)
         if not api_key:
-            print(
-                "MigraDiff: --explain-drift requires an Anthropic API key.",
-                file=err,
-            )
-            print(file=err)
-            print("Set it up once with:", file=err)
-            print("  migra --setup-ai", file=err)
-            print(file=err)
-            print("Or set the environment variable:", file=err)
-            print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-            print(file=err)
-            print(
-                "Get an API key at: https://console.anthropic.com",
-                file=err,
-            )
             return 1
 
         try:
@@ -657,7 +1034,6 @@ def run(args, out=None, err=None):
             check_safety_rules,
             extract_relevant_schema,
             parse_schema_file_for_tables,
-            resolve_api_key,
             redact_api_key,
             classify_statement_risk,
         )
@@ -672,33 +1048,8 @@ def run(args, out=None, err=None):
             )
             return 1
 
-        try:
-            import anthropic  # noqa: F401, F811
-        except ImportError:
-            print(
-                "MigraDiff: --generate requires the AI extras.",
-                file=err,
-            )
-            print("Install with: pip install migradiff[ai]", file=err)
-            return 1
-
-        api_key = resolve_api_key(cli_key=args.api_key)
+        api_key = _require_ai(out, err, args.api_key)
         if not api_key:
-            print(
-                "MigraDiff: --generate requires an Anthropic API key.",
-                file=err,
-            )
-            print(file=err)
-            print("Set it up once with:", file=err)
-            print("  migra --setup-ai", file=err)
-            print(file=err)
-            print("Or set the environment variable:", file=err)
-            print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-            print(file=err)
-            print(
-                "Get an API key at: https://console.anthropic.com",
-                file=err,
-            )
             return 1
 
         # Safety check first
@@ -800,21 +1151,8 @@ def run(args, out=None, err=None):
     ):
         filepath = args.dburl_from
         if os.path.exists(filepath) and filepath.endswith(".sql"):
-            from .ai_explain import resolve_api_key
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --advise requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
                 return 1
 
             from .ai_explain import generate_file_advisory
@@ -972,35 +1310,10 @@ def _run_inner(args, out=None, err=None):
         rollback_result = None
         advisory_result = None
         if args.explain:
-            from .ai_explain import AIExplainer, resolve_api_key, redact_api_key
+            from .ai_explain import AIExplainer, redact_api_key
 
-            try:
-                import anthropic  # noqa: F401, F811, F811
-            except ImportError:
-                print(
-                    "MigraDiff: --explain requires the AI extras.",
-                    file=err,
-                )
-                print("Install with: pip install migradiff[ai]", file=err)
-                return 1
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --explain requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
-                print(
-                    "Get an API key at: https://console.anthropic.com",
-                    file=err,
-                )
                 return 1
 
             if statements:
@@ -1020,35 +1333,10 @@ def _run_inner(args, out=None, err=None):
 
         # AI rollback generation
         if args.rollback:
-            from .ai_explain import AIRollback, resolve_api_key, redact_api_key
+            from .ai_explain import AIRollback, redact_api_key
 
-            try:
-                import anthropic  # noqa: F401, F811, F811
-            except ImportError:
-                print(
-                    "MigraDiff: --rollback requires the AI extras.",
-                    file=err,
-                )
-                print("Install with: pip install migradiff[ai]", file=err)
-                return 1
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --rollback requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
-                print(
-                    "Get an API key at: https://console.anthropic.com",
-                    file=err,
-                )
                 return 1
 
             if statements:
@@ -1081,35 +1369,10 @@ def _run_inner(args, out=None, err=None):
 
         # AI advisory generation
         if args.advise:
-            from .ai_explain import AIAdvisor, resolve_api_key, redact_api_key
+            from .ai_explain import AIAdvisor, redact_api_key
 
-            try:
-                import anthropic  # noqa: F401, F811, F811
-            except ImportError:
-                print(
-                    "MigraDiff: --advise requires the AI extras.",
-                    file=err,
-                )
-                print("Install with: pip install migradiff[ai]", file=err)
-                return 1
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --advise requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
-                print(
-                    "Get an API key at: https://console.anthropic.com",
-                    file=err,
-                )
                 return 1
 
             if statements:
@@ -1154,8 +1417,19 @@ def _run_inner(args, out=None, err=None):
                         file=err,
                     )
 
+        sql_output = None
+        apply_result = None
         try:
             if statements:
+                sql_output = modified_statements.sql
+                if args.apply:
+                    apply_result = _apply_migration(
+                        args.dburl_from,
+                        modified_statements,
+                        sql_output,
+                        rollback_result["text"] if rollback_result else None,
+                        args.env_label,
+                    )
                 if args.output == "json":
                     json_out = format_json_output(
                         statements,
@@ -1193,6 +1467,12 @@ def _run_inner(args, out=None, err=None):
                             "generated_at": advisory_result.get("generated_at", ""),
                         }
                         json_out = json_mod.dumps(data, indent=2)
+                    if apply_result is not None:
+                        import json as json_mod
+
+                        data = json_mod.loads(json_out)
+                        data["apply"] = apply_result
+                        json_out = json_mod.dumps(data, indent=2)
                     print(json_out, file=out)
                 elif args.force_utf8:
                     print(modified_statements.sql.encode("utf8"), file=out)
@@ -1209,6 +1489,32 @@ def _run_inner(args, out=None, err=None):
                     print(file=out)
                     print("--- Performance Advisory ---", file=out)
                     print(advisory_result["text"], file=out)
+                if apply_result is not None and args.output != "json":
+                    print(file=out)
+                    if apply_result["applied"]:
+                        print(
+                            "-- Applied {} statement(s) to {}".format(
+                                apply_result["statement_count"],
+                                apply_result["target"],
+                            ),
+                            file=out,
+                        )
+                        if not apply_result["history_recorded"]:
+                            print(
+                                "-- WARNING: applied successfully, but failed to"
+                                " record migration history: {}".format(
+                                    apply_result["history_error"]
+                                ),
+                                file=err,
+                            )
+                    else:
+                        print(
+                            "-- ERROR: --apply failed, no changes were committed"
+                            " to {}: {}".format(
+                                apply_result["target"], apply_result["error"]
+                            ),
+                            file=err,
+                        )
             elif args.output == "json":
                 json_out = format_json_output(
                     statements,
@@ -1264,6 +1570,44 @@ def _run_inner(args, out=None, err=None):
                 file=err,
             )
             return 3
+
+        # Capture metadata for --promote and --record-history
+        args._has_statements = bool(statements)
+        args._generated_sql = sql_output if statements else None
+        args._generated_rollback = rollback_result["text"] if rollback_result else None
+
+        # --record-history: record the generated migration. Skipped when --apply
+        # already ran, since _apply_migration() already recorded it against
+        # dburl_from (the database that was actually changed) — recording it
+        # again here against dburl_target would be a second, misleading entry.
+        if args.record_history and not args.apply and statements and args.dburl_target:
+            from .history import (
+                compute_migration_hash,
+                ensure_history_table,
+                record_applied,
+            )
+            from sqlbag import S as _S
+
+            fwd_hash = compute_migration_hash(sql_output)
+            rollback_sql_text = args._generated_rollback
+            try:
+                with _S(args.dburl_target) as _s:
+                    ensure_history_table(_s)
+                    record_applied(
+                        _s,
+                        migration_hash=fwd_hash,
+                        forward_sql=sql_output,
+                        rollback_sql=rollback_sql_text,
+                        environment_label=args.env_label,
+                    )
+            except Exception as e:
+                print(
+                    "MigraDiff: Failed to record migration history: {}".format(e),
+                    file=err,
+                )
+
+        if apply_result is not None and not apply_result["applied"]:
+            return 4
 
         if not statements:
             return 0

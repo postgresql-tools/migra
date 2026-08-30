@@ -2,6 +2,82 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Migration state tracking** (`migradiff_history` table):
+  - `--status` / `--history` flags to view migration history from a database
+  - `--record-history` flag to record generated migrations in the target DB
+  - `--env-label` flag to tag history entries with an environment name
+  - New module `migra/history.py` with `ensure_history_table()`,
+    `record_applied()`, `record_rollback()`, `get_applied_hashes()`,
+    `get_history()`, and `compute_migration_hash()`
+  - SQLAlchemy Core implementation via `sqlbag`, no new dependencies
+- **Multi-environment promotion** (`--promote`):
+  - Colon-separated chain of 2+ database URLs or environment aliases
+  - Conflict detection at each hop (target must not have hashes source lacks)
+  - Composes with `--explain`, `--rollback`, `--advise`, `--force-destructive`
+  - Environment aliases resolved from `~/.config/migradiff/environments.json`
+  - `--record-history` integration per hop
+- **Rollback execution tracking** (`--record-rollback`):
+  - Records rollback status (`rolled_back` / `rollback_failed`) in the history table
+  - Accepts a migration hash or rollback SQL file path
+  - `--rollback-status` flag to mark failed rollback attempts
+  - `--status` / `--history` output shows rollback annotations
+- **New tests**: `test_history.py`, `test_command_promote.py`,
+  `test_command_rollback_tracking.py` — all using real Postgres databases
+  (no mocks), covering idempotent table creation, hash normalization,
+  conflict detection, empty-diff hops, safe mode, and rollback tracking.
+- **Migration execution** (`--apply`):
+  - Executes the generated migration against `dburl_from` in a single
+    transaction (all-or-nothing — a failed statement rolls back everything
+    that ran before it) instead of only printing the SQL
+  - On success, automatically records the migration in `dburl_from`'s
+    `migradiff_history` table — no need to also pass `--record-history`
+  - On failure, nothing is recorded (since nothing was actually applied)
+    and the command exits with code 4
+  - Not supported with `--from-file` (no live database to apply to) or
+    `--promote` (not implemented yet) — both are rejected with a clear
+    error before anything runs
+  - New helper `_apply_migration()` in `migra/command.py`; JSON output
+    (`--output json`) gets a new `"apply"` object with the outcome
+  - New tests: `test_command_apply.py` (11 tests, real Postgres, including
+    a direct atomicity test that forces a mid-migration failure)
+
+### Fixed
+
+- **Comma-separated `--schema`/`--exclude_schema` silently matched nothing**:
+  `--schema public,reporting` was documented as supported but the raw
+  string was passed straight to `schemainspect`, which compares it for
+  *exact* equality against each object's schema name — `"public,reporting"`
+  never equals `"public"` or `"reporting"`, so the diff was always empty
+  and nothing was reported to the user. Single-schema (`--schema public`)
+  and no-schema calls were never affected — this only broke 2+ names.
+  - Fix: `migra/util.py` gains `parse_schema_arg()` (splits and trims the
+    comma-separated value) and `filter_inspector_schemas()` (post-filters
+    an inspector's tracked object collections using schemainspect's own
+    `PROPS` list, so it stays in sync with whatever object types
+    schemainspect adds in the future).
+  - `migra/migra.py` gains `_get_inspector()`, used at all 5 of
+    `Migration`'s inspector-construction call sites (`__init__` x2,
+    `inspect_from()`, `inspect_target()`, `apply()`). Single-schema/no-schema
+    calls are passed straight through unchanged (zero behavior change);
+    only 2+ comma-separated names take the new post-filter path.
+  - New tests: `test_multischema`, `test_multischema_whitespace_tolerant`,
+    `test_exclude_multischema` in `test_migra.py`, plus new fixtures under
+    `tests/FIXTURES/multischema/` and `tests/FIXTURES/exclude_multischema/`
+    — each includes a third, unlisted schema to prove filtering actually
+    excludes it, not just that it happens to work with one schema.
+
+### Notes
+
+- This is the foundational layer for the upcoming "Control Plane" feature set.
+- Resolved: `migradiff_history` used to only record migrations as
+  *generated*, not *applied* — `--apply` closes that gap by executing the
+  migration itself and only recording history on confirmed success. Plain
+  `--record-history` (without `--apply`) still only means "generated", not
+  "applied" — see the README "Migration State Tracking" section.
+- All new features work without AI extras (`anthropic` optional dependency).
+
 ## [1.7.2] - 2026-06-08
 - Fix: Use PEP 621 [project] table for PyPI metadata (homepage, repository, bug tracker)
 

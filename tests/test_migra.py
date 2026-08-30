@@ -60,9 +60,25 @@ def test_singleschema():
         do_fixture_test(FIXTURE_NAME, schema="goodschema")
 
 
+def test_multischema():
+    for FIXTURE_NAME in ["multischema"]:
+        do_fixture_test(FIXTURE_NAME, schema="schema1,schema2")
+
+
+def test_multischema_whitespace_tolerant():
+    # comma-separated schema names should tolerate surrounding whitespace
+    for FIXTURE_NAME in ["multischema"]:
+        do_fixture_test(FIXTURE_NAME, schema=" schema1 , schema2 ")
+
+
 def test_excludeschema():
     for FIXTURE_NAME in ["excludeschema"]:
         do_fixture_test(FIXTURE_NAME, exclude_schema="excludedschema")
+
+
+def test_exclude_multischema():
+    for FIXTURE_NAME in ["exclude_multischema"]:
+        do_fixture_test(FIXTURE_NAME, exclude_schema="schema3,public")
 
 
 def test_singleschema_ext():
