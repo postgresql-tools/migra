@@ -276,6 +276,45 @@ def _format_destructive_summary(statements):
     return "\n".join(lines)
 
 
+def _require_ai(out, err, cli_key=None):
+    """Resolve an Anthropic API key, printing standard help text on failure.
+
+    Returns the resolved key string or ``None`` on error.
+    """
+    try:
+        import anthropic  # noqa: F401
+    except ImportError:
+        print(
+            "MigraDiff: AI features require the extras.",
+            file=err,
+        )
+        print("Install with: pip install migradiff[ai]", file=err)
+        return None
+
+    from .ai_explain import resolve_api_key
+
+    api_key = resolve_api_key(cli_key=cli_key)
+    if not api_key:
+        print(
+            "MigraDiff: An Anthropic API key is required.",
+            file=err,
+        )
+        print(file=err)
+        print("Set it up once with:", file=err)
+        print("  migra --setup-ai", file=err)
+        print(file=err)
+        print("Or set the environment variable:", file=err)
+        print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
+        print(file=err)
+        print(
+            "Get an API key at: https://console.anthropic.com",
+            file=err,
+        )
+        return None
+
+    return api_key
+
+
 def _migration_sort_key(filename):
     """Extract sort key from a migration filename."""
     stem = filename.lower().replace(".sql", "")
@@ -947,35 +986,8 @@ def run(args, out=None, err=None):
             )
             return 1
 
-        try:
-            import anthropic  # noqa: F401, F811
-        except ImportError:
-            print(
-                "MigraDiff: --explain-drift requires the AI extras.",
-                file=err,
-            )
-            print("Install with: pip install migradiff[ai]", file=err)
-            return 1
-
-        from .ai_explain import resolve_api_key
-
-        api_key = resolve_api_key(cli_key=args.api_key)
+        api_key = _require_ai(out, err, args.api_key)
         if not api_key:
-            print(
-                "MigraDiff: --explain-drift requires an Anthropic API key.",
-                file=err,
-            )
-            print(file=err)
-            print("Set it up once with:", file=err)
-            print("  migra --setup-ai", file=err)
-            print(file=err)
-            print("Or set the environment variable:", file=err)
-            print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-            print(file=err)
-            print(
-                "Get an API key at: https://console.anthropic.com",
-                file=err,
-            )
             return 1
 
         try:
@@ -1037,33 +1049,8 @@ def run(args, out=None, err=None):
             )
             return 1
 
-        try:
-            import anthropic  # noqa: F401, F811
-        except ImportError:
-            print(
-                "MigraDiff: --generate requires the AI extras.",
-                file=err,
-            )
-            print("Install with: pip install migradiff[ai]", file=err)
-            return 1
-
-        api_key = resolve_api_key(cli_key=args.api_key)
+        api_key = _require_ai(out, err, args.api_key)
         if not api_key:
-            print(
-                "MigraDiff: --generate requires an Anthropic API key.",
-                file=err,
-            )
-            print(file=err)
-            print("Set it up once with:", file=err)
-            print("  migra --setup-ai", file=err)
-            print(file=err)
-            print("Or set the environment variable:", file=err)
-            print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-            print(file=err)
-            print(
-                "Get an API key at: https://console.anthropic.com",
-                file=err,
-            )
             return 1
 
         # Safety check first
@@ -1165,21 +1152,8 @@ def run(args, out=None, err=None):
     ):
         filepath = args.dburl_from
         if os.path.exists(filepath) and filepath.endswith(".sql"):
-            from .ai_explain import resolve_api_key
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --advise requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
                 return 1
 
             from .ai_explain import generate_file_advisory
@@ -1337,35 +1311,10 @@ def _run_inner(args, out=None, err=None):
         rollback_result = None
         advisory_result = None
         if args.explain:
-            from .ai_explain import AIExplainer, resolve_api_key, redact_api_key
+            from .ai_explain import AIExplainer, redact_api_key
 
-            try:
-                import anthropic  # noqa: F401, F811, F811
-            except ImportError:
-                print(
-                    "MigraDiff: --explain requires the AI extras.",
-                    file=err,
-                )
-                print("Install with: pip install migradiff[ai]", file=err)
-                return 1
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --explain requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
-                print(
-                    "Get an API key at: https://console.anthropic.com",
-                    file=err,
-                )
                 return 1
 
             if statements:
@@ -1385,35 +1334,10 @@ def _run_inner(args, out=None, err=None):
 
         # AI rollback generation
         if args.rollback:
-            from .ai_explain import AIRollback, resolve_api_key, redact_api_key
+            from .ai_explain import AIRollback, redact_api_key
 
-            try:
-                import anthropic  # noqa: F401, F811, F811
-            except ImportError:
-                print(
-                    "MigraDiff: --rollback requires the AI extras.",
-                    file=err,
-                )
-                print("Install with: pip install migradiff[ai]", file=err)
-                return 1
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --rollback requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
-                print(
-                    "Get an API key at: https://console.anthropic.com",
-                    file=err,
-                )
                 return 1
 
             if statements:
@@ -1446,35 +1370,10 @@ def _run_inner(args, out=None, err=None):
 
         # AI advisory generation
         if args.advise:
-            from .ai_explain import AIAdvisor, resolve_api_key, redact_api_key
+            from .ai_explain import AIAdvisor, redact_api_key
 
-            try:
-                import anthropic  # noqa: F401, F811, F811
-            except ImportError:
-                print(
-                    "MigraDiff: --advise requires the AI extras.",
-                    file=err,
-                )
-                print("Install with: pip install migradiff[ai]", file=err)
-                return 1
-
-            api_key = resolve_api_key(cli_key=args.api_key)
+            api_key = _require_ai(out, err, args.api_key)
             if not api_key:
-                print(
-                    "MigraDiff: --advise requires an Anthropic API key.",
-                    file=err,
-                )
-                print(file=err)
-                print("Set it up once with:", file=err)
-                print("  migra --setup-ai", file=err)
-                print(file=err)
-                print("Or set the environment variable:", file=err)
-                print("  export ANTHROPIC_API_KEY=sk-ant-...", file=err)
-                print(file=err)
-                print(
-                    "Get an API key at: https://console.anthropic.com",
-                    file=err,
-                )
                 return 1
 
             if statements:
