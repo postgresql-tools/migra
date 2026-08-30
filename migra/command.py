@@ -1034,7 +1034,6 @@ def run(args, out=None, err=None):
             check_safety_rules,
             extract_relevant_schema,
             parse_schema_file_for_tables,
-            resolve_api_key,
             redact_api_key,
             classify_statement_risk,
         )
