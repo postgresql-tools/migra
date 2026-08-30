@@ -285,7 +285,7 @@ def _require_ai(out, err, cli_key=None):
         import anthropic  # noqa: F401
     except ImportError:
         print(
-            "MigraDiff: AI features require the extras.",
+            "MigraDiff: AI features require the AI extras.",
             file=err,
         )
         print("Install with: pip install migradiff[ai]", file=err)
